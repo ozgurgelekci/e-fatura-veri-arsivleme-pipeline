@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/InvoiceArchive.Application/InvoiceArchive.Application.csproj" />
+    <Project Path="src/InvoiceArchive.Contracts/InvoiceArchive.Contracts.csproj" />
+    <Project Path="src/InvoiceArchive.Domain/InvoiceArchive.Domain.csproj" />
+    <Project Path="src/InvoiceArchive.Infrastructure/InvoiceArchive.Infrastructure.csproj" />
+    <Project Path="src/InvoiceArchive.StorageConsumer/InvoiceArchive.StorageConsumer.csproj" />
+    <Project Path="src/InvoiceArchive.Worker/InvoiceArchive.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj" />
+  </Folder>
+</Solution>
