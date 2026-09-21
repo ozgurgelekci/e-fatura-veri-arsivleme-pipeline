@@ -20,14 +20,17 @@ public static class DependencyInjection
     {
         services.AddOptions<ElasticsearchOptions>()
             .Bind(configuration.GetSection(ElasticsearchOptions.SectionName))
+            .ValidateDataAnnotations()
             .ValidateOnStart();
 
         services.AddOptions<StorageOptions>()
             .Bind(configuration.GetSection(StorageOptions.SectionName))
+            .ValidateDataAnnotations()
             .ValidateOnStart();
 
         services.AddOptions<KafkaOptions>()
             .Bind(configuration.GetSection(KafkaOptions.SectionName))
+            .ValidateDataAnnotations()
             .ValidateOnStart();
 
         services.AddSingleton(TimeProvider.System);

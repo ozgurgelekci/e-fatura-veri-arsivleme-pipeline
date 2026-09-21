@@ -28,6 +28,7 @@ try
 
     builder.Services.AddOptions<ArchiveOptions>()
         .Bind(builder.Configuration.GetSection(ArchiveOptions.SectionName))
+        .ValidateDataAnnotations()
         .ValidateOnStart();
 
     builder.Services.AddInvoiceArchiveInfrastructure(builder.Configuration);
