@@ -45,6 +45,51 @@ public class StreamingZipArchiveBuilderTests
         Assert.Equal("test-batch-1", manifest!.BatchId);
         Assert.Equal(50, manifest.InvoiceCount);
         Assert.Equal("tenant-a", manifest.TenantId);
+        Assert.Equal("deflate", manifest.Compression);
+        Assert.Equal(1, manifest.ArchiveVersion);
+        Assert.Equal("INV-1", manifest.FirstInvoiceId);
+        Assert.Equal("INV-50", manifest.LastInvoiceId);
+
+        var firstInvoice = archive.GetEntry("invoices/INV-1.xml");
+        Assert.NotNull(firstInvoice);
+        using var invoiceReader = new StreamReader(firstInvoice!.Open(), Encoding.UTF8);
+        var xml = await invoiceReader.ReadToEndAsync();
+        Assert.StartsWith("<Invoice id=\"1\">", xml);
+    }
+
+    [Fact]
+    public async Task Sanitizes_unsafe_invoice_ids_in_entry_names()
+    {
+        var builder = new StreamingZipArchiveBuilder(
+            NullLogger<StreamingZipArchiveBuilder>.Instance,
+            TimeProvider.System);
+
+        using var memory = new MemoryStream();
+        var result = await builder.BuildAsync(
+            "unsafe-batch",
+            tenantId: null,
+            ProduceWithUnsafeIds(),
+            memory,
+            new BatchLimits(MaxRecordCount: 10, MaxArchiveSizeBytes: long.MaxValue),
+            CancellationToken.None);
+
+        Assert.Equal(1, result.InvoiceCount);
+
+        memory.Position = 0;
+        using var archive = new ZipArchive(memory, ZipArchiveMode.Read);
+        Assert.Null(archive.GetEntry("invoices/../../evil.xml"));
+        Assert.NotNull(archive.GetEntry("invoices/.._.._evil.xml"));
+    }
+
+    private static async IAsyncEnumerable<Invoice> ProduceWithUnsafeIds()
+    {
+        yield return new Invoice
+        {
+            InvoiceId = "../../evil",
+            Xml = "<Invoice id=\"evil\"/>",
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 1, DateTimeKind.Utc)
+        };
+        await Task.CompletedTask;
     }
 
     [Fact]

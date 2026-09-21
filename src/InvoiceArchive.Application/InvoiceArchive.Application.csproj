@@ -17,4 +17,8 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="InvoiceArchive.Tests" />
+  </ItemGroup>
+
 </Project>
