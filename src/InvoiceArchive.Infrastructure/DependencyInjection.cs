@@ -8,6 +8,7 @@ using InvoiceArchive.Infrastructure.Storage;
 using InvoiceArchive.Infrastructure.Zip;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace InvoiceArchive.Infrastructure;
 
@@ -38,6 +39,7 @@ public static class DependencyInjection
         services.AddSingleton<IArchiveBatchRepository, InMemoryArchiveBatchRepository>();
         services.AddSingleton<IBatchIdGenerator, DefaultBatchIdGenerator>();
         services.AddSingleton<IStorageKeyBuilder, DefaultStorageKeyBuilder>();
+        services.TryAddSingleton<IArchiveMetrics>(NullArchiveMetrics.Instance);
         services.AddSingleton<ArchiveService>();
         services.AddSingleton<BatchProcessor>();
         services.AddSingleton<KafkaArchiveEventConsumer>();

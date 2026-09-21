@@ -1,3 +1,4 @@
+using InvoiceArchive.Application.Abstractions;
 using InvoiceArchive.Application.Configuration;
 using InvoiceArchive.Application.Services;
 using InvoiceArchive.Domain.Invoices;
@@ -30,6 +31,7 @@ public class ArchiveServiceIdempotencyTests
 
         var service = new ArchiveService(
             zipBuilder, storage, publisher, repository, keyBuilder,
+            NullArchiveMetrics.Instance,
             options, NullLogger<ArchiveService>.Instance, TimeProvider.System);
 
         var batch1 = await service.ProcessBatchAsync("batch-1", null, ProduceInvoices(5), CancellationToken.None);

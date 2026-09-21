@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using InvoiceArchive.Application.Abstractions;
 using InvoiceArchive.Application.Configuration;
 using InvoiceArchive.Contracts.Events;
@@ -15,6 +16,7 @@ public sealed class ArchiveService
     private readonly IArchiveEventPublisher _eventPublisher;
     private readonly IArchiveBatchRepository _repository;
     private readonly IStorageKeyBuilder _keyBuilder;
+    private readonly IArchiveMetrics _metrics;
     private readonly IOptionsMonitor<ArchiveOptions> _options;
     private readonly ILogger<ArchiveService> _logger;
     private readonly TimeProvider _time;
@@ -25,6 +27,7 @@ public sealed class ArchiveService
         IArchiveEventPublisher eventPublisher,
         IArchiveBatchRepository repository,
         IStorageKeyBuilder keyBuilder,
+        IArchiveMetrics metrics,
         IOptionsMonitor<ArchiveOptions> options,
         ILogger<ArchiveService> logger,
         TimeProvider time)
@@ -34,6 +37,7 @@ public sealed class ArchiveService
         _eventPublisher = eventPublisher;
         _repository = repository;
         _keyBuilder = keyBuilder;
+        _metrics = metrics;
         _options = options;
         _logger = logger;
         _time = time;
@@ -48,6 +52,7 @@ public sealed class ArchiveService
         var options = _options.CurrentValue;
         var limits = new BatchLimits(options.MaxRecordsPerBatch, options.MaxArchiveSizeBytes);
         var nowUtc = _time.GetUtcNow().UtcDateTime;
+        var stopwatch = Stopwatch.StartNew();
 
         var batch = new ArchiveBatch
         {
@@ -160,9 +165,12 @@ public sealed class ArchiveService
                 LastInvoiceId = buildResult.LastInvoiceId
             }, cancellationToken).ConfigureAwait(false);
 
+            stopwatch.Stop();
+            _metrics.RecordBatchSucceeded(batch.InvoiceCount, batch.SizeInBytes, stopwatch.Elapsed);
+
             _logger.LogInformation(
-                "BatchId={BatchId} InvoiceCount={InvoiceCount} ZipSize={SizeBytes} Sha256={Sha256} Status=Completed",
-                batchId, batch.InvoiceCount, batch.SizeInBytes, buildResult.Sha256);
+                "BatchId={BatchId} InvoiceCount={InvoiceCount} ZipSize={SizeBytes} Sha256={Sha256} DurationSeconds={Duration} Status=Completed",
+                batchId, batch.InvoiceCount, batch.SizeInBytes, buildResult.Sha256, stopwatch.Elapsed.TotalSeconds);
 
             return batch;
         }
@@ -172,6 +180,8 @@ public sealed class ArchiveService
         }
         catch (Exception ex)
         {
+            _metrics.RecordBatchFailed();
+
             batch.Status = ArchiveStatus.Failed;
             batch.ErrorMessage = ex.Message;
             batch.CompletedAt = _time.GetUtcNow().UtcDateTime;

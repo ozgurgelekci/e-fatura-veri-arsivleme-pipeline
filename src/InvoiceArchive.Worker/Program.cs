@@ -1,8 +1,11 @@
+using InvoiceArchive.Application.Abstractions;
 using InvoiceArchive.Application.Configuration;
 using InvoiceArchive.Infrastructure;
 using InvoiceArchive.Worker;
+using InvoiceArchive.Worker.Metrics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
@@ -28,6 +31,7 @@ try
         .ValidateOnStart();
 
     builder.Services.AddInvoiceArchiveInfrastructure(builder.Configuration);
+    builder.Services.Replace(ServiceDescriptor.Singleton<IArchiveMetrics, PrometheusArchiveMetrics>());
 
     builder.Services.AddHostedService<MetricServerHostedService>();
     builder.Services.AddHostedService<ArchiveWorker>();

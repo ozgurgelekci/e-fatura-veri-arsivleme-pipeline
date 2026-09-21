@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using InvoiceArchive.Application.Configuration;
 using InvoiceArchive.Application.Services;
-using InvoiceArchive.Worker.Metrics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -38,7 +37,6 @@ public sealed class ArchiveWorker : BackgroundService
             var completed = await _processor.RunAsync(stoppingToken).ConfigureAwait(false);
             stopwatch.Stop();
 
-            ArchiveMetrics.BatchesTotal.Inc(completed);
             _logger.LogInformation(
                 "ArchiveWorker run finished. BatchesCompleted={Count} DurationSeconds={Duration}",
                 completed, stopwatch.Elapsed.TotalSeconds);
@@ -49,7 +47,6 @@ public sealed class ArchiveWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            ArchiveMetrics.BatchesFailedTotal.Inc();
             _logger.LogCritical(ex, "ArchiveWorker crashed.");
         }
         finally

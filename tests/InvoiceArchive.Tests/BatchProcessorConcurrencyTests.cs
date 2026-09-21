@@ -33,6 +33,7 @@ public class BatchProcessorConcurrencyTests
 
         var archiveService = new ArchiveService(
             zipBuilder, storage, publisher, repository, keyBuilder,
+            NullArchiveMetrics.Instance,
             options, NullLogger<ArchiveService>.Instance, TimeProvider.System);
 
         var reader = new FakeInvoiceReader(totalInvoices: 100, delayPerInvoice: TimeSpan.Zero);
@@ -75,6 +76,7 @@ public class BatchProcessorConcurrencyTests
 
         var archiveService = new ArchiveService(
             zipBuilder, storage, publisher, repository, keyBuilder,
+            NullArchiveMetrics.Instance,
             options, NullLogger<ArchiveService>.Instance, TimeProvider.System);
 
         var reader = new FakeInvoiceReader(totalInvoices: 10, xmlOverride: largeXml);

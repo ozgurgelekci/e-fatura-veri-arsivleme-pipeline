@@ -134,7 +134,7 @@ public sealed class ElasticsearchInvoiceReader : IInvoiceReader
 
         if (query.CreatedBefore.HasValue)
         {
-            filters.Add(new DateRangeQuery("createdAt")
+            filters.Add(new DateRangeQuery(Field.FromString("createdAt")!)
             {
                 Lt = query.CreatedBefore.Value.ToString("o")
             });
@@ -142,7 +142,7 @@ public sealed class ElasticsearchInvoiceReader : IInvoiceReader
 
         if (!string.IsNullOrEmpty(query.TenantId))
         {
-            filters.Add(new TermQuery("tenantId") { Value = query.TenantId });
+            filters.Add(new TermQuery(Field.FromString("tenantId")!) { Value = query.TenantId });
         }
 
         if (filters.Count == 0)
