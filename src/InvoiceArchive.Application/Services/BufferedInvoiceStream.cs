@@ -2,10 +2,9 @@ using InvoiceArchive.Domain.Invoices;
 
 namespace InvoiceArchive.Application.Services;
 
-internal sealed class BufferedInvoiceStream
+internal sealed class BufferedInvoiceStream : IAsyncDisposable
 {
     private readonly IAsyncEnumerator<Invoice> _source;
-    private Invoice? _peeked;
     private bool _completed;
 
     public BufferedInvoiceStream(IAsyncEnumerable<Invoice> source)
@@ -13,12 +12,9 @@ internal sealed class BufferedInvoiceStream
         _source = source.GetAsyncEnumerator();
     }
 
-    public async ValueTask<Invoice?> PeekAsync(CancellationToken cancellationToken)
+    public async ValueTask<Invoice?> TakeOneAsync(CancellationToken cancellationToken)
     {
-        if (_peeked is not null)
-        {
-            return _peeked;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
         if (_completed)
         {
             return null;
@@ -26,8 +22,7 @@ internal sealed class BufferedInvoiceStream
 
         if (await _source.MoveNextAsync().ConfigureAwait(false))
         {
-            _peeked = _source.Current;
-            return _peeked;
+            return _source.Current;
         }
 
         _completed = true;
@@ -35,38 +30,12 @@ internal sealed class BufferedInvoiceStream
         return null;
     }
 
-    public async IAsyncEnumerable<Invoice> TakeAsync(
-        int maxCount,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    public async ValueTask DisposeAsync()
     {
-        var taken = 0;
-        while (taken < maxCount)
+        if (!_completed)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            Invoice? next;
-            if (_peeked is not null)
-            {
-                next = _peeked;
-                _peeked = null;
-            }
-            else
-            {
-                if (_completed)
-                {
-                    yield break;
-                }
-                if (!await _source.MoveNextAsync().ConfigureAwait(false))
-                {
-                    _completed = true;
-                    await _source.DisposeAsync().ConfigureAwait(false);
-                    yield break;
-                }
-                next = _source.Current;
-            }
-
-            taken++;
-            yield return next;
+            _completed = true;
+            await _source.DisposeAsync().ConfigureAwait(false);
         }
     }
 }
