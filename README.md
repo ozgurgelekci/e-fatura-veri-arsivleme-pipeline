@@ -529,6 +529,13 @@ HttpListener tabanlı — ASP.NET Core bağımlılığı yok).
 | `archive_zip_size_bytes`                 | Histogram  | ZIP boyutu dağılımı (1 MiB → 4 GiB exponential bucket)   |
 | `archive_processing_duration_seconds`    | Histogram  | Batch başına toplam işleme süresi                        |
 
+Application katmanı bu metric'leri doğrudan bilmez; `IArchiveMetrics` portu
+üzerinden `ArchiveService` her batch sonunda `RecordBatchSucceeded(invoiceCount,
+zipSize, elapsed)` veya `RecordBatchFailed()` çağırır. Worker `PrometheusArchiveMetrics`
+adaptörünü DI'da `services.Replace(...)` ile devreye alır; test/CLI senaryoları
+`NullArchiveMetrics`'i kullanır. Bu sayede Prometheus bağımlılığı Application
+projesine sızmaz.
+
 Örnek `100.000 invoice kaç dakikada arşivleniyor?` sorusuna cevap:
 
 ```promql
@@ -560,6 +567,11 @@ yönetilir.
 
 Environment variable formatı: `Section__Property=value` (örn.
 `Storage__ServiceUrl=http://localhost:9000`).
+
+Tüm option sınıfları `[Required]` / `[Range]` DataAnnotations ile işaretlenir ve
+`ValidateDataAnnotations().ValidateOnStart()` DI'da bağlanmıştır — geçersiz
+konfigürasyon **host boot sırasında** `OptionsValidationException` fırlatır,
+çalıştıktan sonra sessizce hatalı davranışa dönüşmez.
 
 ### 11.1 `Archive` bölümü
 
@@ -748,15 +760,20 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 
 ## 15. Testler
 
-`tests/InvoiceArchive.Tests` içinde 7 xUnit testi:
+`tests/InvoiceArchive.Tests` içinde 12 xUnit testi:
 
 | Test                                                                              | Doğruladığı davranış                                                          |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| `StreamingZipArchiveBuilderTests.Builds_zip_with_manifest_and_counts_correctly`   | 50 invoice → 51 entry (50 XML + manifest.json), SHA-256 dolu, ilk/son id doğru |
+| `StreamingZipArchiveBuilderTests.Builds_zip_with_manifest_and_counts_correctly`   | 50 invoice → 51 entry (50 XML + manifest.json), SHA-256 dolu, ilk/son id, `compression=deflate`, `archiveVersion=1` |
 | `StreamingZipArchiveBuilderTests.Stops_at_max_record_count`                       | `MaxRecordCount=10` sınırına ulaşınca `LimitReached=true`, invoice sayısı 10  |
+| `StreamingZipArchiveBuilderTests.Sanitizes_unsafe_invoice_ids_in_entry_names`     | `../../evil` gibi id'ler entry adında path traversal'a dönüşmez               |
 | `ArchiveServiceIdempotencyTests.Second_upload_is_skipped_when_object_already_exists` | Aynı batchId iki kere işlense de `storage.UploadCallCount == 1`             |
 | `BatchProcessorConcurrencyTests.Processes_all_batches_with_multiple_consumers`    | `MaxConcurrency=4` + `ChannelCapacity=2` → 100 invoice / 10 batch tam işlenir |
 | `BatchProcessorConcurrencyTests.Producer_stops_batch_when_approx_size_limit_reached` | Producer, `MaxArchiveSizeBytes` aşımından önce batch'i kapatır             |
+| `BufferedInvoiceStreamTests.TakeOneAsync_returns_null_when_source_empty`          | Boş kaynakta ilk çağrı `null`                                                 |
+| `BufferedInvoiceStreamTests.TakeOneAsync_yields_items_in_order_then_null`         | Sıralı teslim + tükendiğinde `null`                                           |
+| `BufferedInvoiceStreamTests.TakeOneAsync_returns_null_after_completion_without_moving_source` | Tamamlandıktan sonra kaynak enumerator'a tekrar `MoveNext` çağırılmaz  |
+| `BufferedInvoiceStreamTests.TakeOneAsync_throws_on_cancellation`                  | `CancellationToken` iptal edilmişse `OperationCanceledException`              |
 | `DefaultStorageKeyBuilderTests.Uses_yyyy_mm_dd_layout_without_tenant`             | Key = `2026/08/11/batch-{id}.zip`                                             |
 | `DefaultStorageKeyBuilderTests.Prefixes_tenant_when_provided`                     | Key = `tenant-42/2026/08/11/batch-{id}.zip`                                   |
 
@@ -810,9 +827,9 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 | 31 | MinIO                                             | `Storage.Provider=MinIO`, `ForcePathStyle=true`                                                      |
 | 32 | Docker Compose                                    | ES + Kafka (KRaft) + MinIO + worker + consumer                                                       |
 | 33 | Structured logging                                | Serilog — batch başına BatchId, InvoiceCount, ZipSize, Sha256, Status                                |
-| 34 | Metrics                                           | Prometheus — 5 metric (`archive_batches_total` vb.)                                                  |
+| 34 | Metrics                                           | Prometheus — 5 metric, Application `IArchiveMetrics` portu üzerinden per-batch kaydediliyor          |
 | 35 | Performans testleri                               | Benchmark scriptleri yok — production'a giderken yapılmalı (MVP dışı)                                |
-| 36 | Test senaryoları                                  | Happy path + idempotency + max-record + concurrency + key layout birim testleri (7 test)             |
+| 36 | Test senaryoları                                  | Happy path + idempotency + max-record + concurrency + buffer + sanitization + key layout (12 test)   |
 | 37 | Güvenlik                                          | `ServerSideEncryption=AES256` opsiyon; IAM Role AWS default credential chain (bkz. §18)              |
 | 38 | S3 lifecycle policy                               | Uygulama dışı — S3 bucket policy tarafında yapılır                                                   |
 | 39 | Önerilen MVP                                      | Bu sürüm MVP + retry/DLQ/metrics/checksum/manifest üstü — analiz §39'un tamamı                       |
