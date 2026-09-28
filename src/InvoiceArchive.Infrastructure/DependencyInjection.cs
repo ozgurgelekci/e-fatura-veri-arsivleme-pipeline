@@ -9,6 +9,8 @@ using InvoiceArchive.Infrastructure.Zip;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
+using Npgsql;
 
 namespace InvoiceArchive.Infrastructure;
 
@@ -33,13 +35,17 @@ public static class DependencyInjection
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
+        services.AddOptions<PersistenceOptions>()
+            .Bind(configuration.GetSection(PersistenceOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ElasticsearchClientFactory>();
         services.AddSingleton<IInvoiceReader, ElasticsearchInvoiceReader>();
         services.AddSingleton<IZipArchiveBuilder, StreamingZipArchiveBuilder>();
         services.AddSingleton<IArchiveStorage, S3ArchiveStorage>();
         services.AddSingleton<IArchiveEventPublisher, KafkaArchiveEventPublisher>();
-        services.AddSingleton<IArchiveBatchRepository, InMemoryArchiveBatchRepository>();
         services.AddSingleton<IBatchIdGenerator, DefaultBatchIdGenerator>();
         services.AddSingleton<IStorageKeyBuilder, DefaultStorageKeyBuilder>();
         services.TryAddSingleton<IArchiveMetrics>(NullArchiveMetrics.Instance);
@@ -47,6 +53,33 @@ public static class DependencyInjection
         services.AddSingleton<BatchProcessor>();
         services.AddSingleton<KafkaArchiveEventConsumer>();
 
+        AddArchiveBatchRepository(services, configuration);
+
         return services;
+    }
+
+    private static void AddArchiveBatchRepository(IServiceCollection services, IConfiguration configuration)
+    {
+        var provider = configuration.GetSection(PersistenceOptions.SectionName)["Provider"]
+            ?? "InMemory";
+
+        if (string.Equals(provider, "Postgres", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<NpgsqlDataSource>(sp =>
+            {
+                var opts = sp.GetRequiredService<IOptions<PersistenceOptions>>().Value;
+                if (string.IsNullOrWhiteSpace(opts.ConnectionString))
+                {
+                    throw new InvalidOperationException(
+                        "Persistence:Provider=Postgres requires Persistence:ConnectionString to be set.");
+                }
+                return new NpgsqlDataSourceBuilder(opts.ConnectionString).Build();
+            });
+            services.AddSingleton<IArchiveBatchRepository, PostgresArchiveBatchRepository>();
+        }
+        else
+        {
+            services.AddSingleton<IArchiveBatchRepository, InMemoryArchiveBatchRepository>();
+        }
     }
 }

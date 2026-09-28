@@ -8,6 +8,7 @@ volumes:
   elasticsearch-data:
   minio-data:
   kafka-data:
+  postgres-data:
 
 services:
   elasticsearch:
@@ -89,6 +90,25 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 10s
       timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: invoice-postgres
+    environment:
+      - POSTGRES_USER=invoicearchive
+      - POSTGRES_PASSWORD=invoicearchive
+      - POSTGRES_DB=invoicearchive
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/postgres:/docker-entrypoint-initdb.d:ro
+    networks: [invoice-archive]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U invoicearchive -d invoicearchive"]
+      interval: 5s
+      timeout: 3s
       retries: 20
 
   minio-init:

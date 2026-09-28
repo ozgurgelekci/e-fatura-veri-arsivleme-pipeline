@@ -611,7 +611,17 @@ konfigürasyon **host boot sırasında** `OptionsValidationException` fırlatır
 | `MaxRetryAttempts`          | `5`                   | Polly retry sayısı                                       |
 | `InitialRetryDelaySeconds`  | `5`                   | Exponential backoff başlangıç gecikmesi                  |
 
-### 11.4 `Kafka` bölümü
+### 11.4 `Persistence` bölümü
+
+| Anahtar             | Varsayılan          | Açıklama                                                    |
+|---------------------|---------------------|-------------------------------------------------------------|
+| `Provider`          | `InMemory`          | `InMemory` veya `Postgres`                                  |
+| `ConnectionString`  | *(null)*            | Postgres için zorunlu (Npgsql format)                       |
+| `SchemaName`        | `public`            | Tablo şeması                                                |
+| `TableName`         | `archive_batches`   | Tablo adı                                                   |
+| `AutoMigrate`       | `true`              | `true` ise ilk çağrıda `CREATE SCHEMA/TABLE IF NOT EXISTS`  |
+
+### 11.5 `Kafka` bölümü
 
 | Anahtar                        | Varsayılan                          | Açıklama                             |
 |--------------------------------|-------------------------------------|--------------------------------------|
@@ -637,6 +647,7 @@ konfigürasyon **host boot sırasında** `OptionsValidationException` fırlatır
 | `kafka-init`      | `bitnami/kafka:3.7`                           | —                 | Startup'ta 4 topic oluşturur             |
 | `minio`           | `minio/minio:RELEASE.2025-01-20T14-49-07Z`    | 9000 (API) / 9001 (Console) | S3 uyumlu storage              |
 | `minio-init`      | `minio/mc:RELEASE.2025-01-17T23-25-50Z`       | —                 | Startup'ta `invoice-archive` bucket'ı oluşturur |
+| `postgres`        | `postgres:16-alpine`                          | 5432              | Persistent archive_batches store (Postgres provider) |
 | `archive-worker`  | build `src/InvoiceArchive.Worker/Dockerfile`  | 9464              | ES → ZIP → S3 → Kafka                    |
 | `storage-consumer`| build `src/InvoiceArchive.StorageConsumer/Dockerfile` | —         | Kafka → S3 verify → Verified/DLQ         |
 
@@ -760,7 +771,7 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 
 ## 15. Testler
 
-`tests/InvoiceArchive.Tests` içinde 12 xUnit testi:
+`tests/InvoiceArchive.Tests` içinde 16 xUnit testi:
 
 | Test                                                                              | Doğruladığı davranış                                                          |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
@@ -776,6 +787,10 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 | `BufferedInvoiceStreamTests.TakeOneAsync_throws_on_cancellation`                  | `CancellationToken` iptal edilmişse `OperationCanceledException`              |
 | `DefaultStorageKeyBuilderTests.Uses_yyyy_mm_dd_layout_without_tenant`             | Key = `2026/08/11/batch-{id}.zip`                                             |
 | `DefaultStorageKeyBuilderTests.Prefixes_tenant_when_provided`                     | Key = `tenant-42/2026/08/11/batch-{id}.zip`                                   |
+| `ArchiveBatchRepositoryDependencyInjectionTests.Defaults_to_in_memory_repository_when_provider_missing` | `Persistence` bölümü yoksa `InMemoryArchiveBatchRepository` register olur |
+| `ArchiveBatchRepositoryDependencyInjectionTests.Registers_in_memory_repository_when_provider_is_in_memory` | `Provider=InMemory` → `InMemoryArchiveBatchRepository`                     |
+| `ArchiveBatchRepositoryDependencyInjectionTests.Registers_postgres_repository_when_provider_is_postgres` | `Provider=Postgres` + `ConnectionString` → `PostgresArchiveBatchRepository` |
+| `ArchiveBatchRepositoryDependencyInjectionTests.Postgres_provider_without_connection_string_throws_at_resolve` | `Provider=Postgres` ama `ConnectionString` yoksa `InvalidOperationException` |
 
 Çalıştırma:
 
@@ -821,7 +836,7 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 | 25 | Arşivlenecek veri (XML vs JSON)                   | Şu an XML (`invoice.Xml` alanı) — MVP kararı; metadata için manifest ayrıca var                      |
 | 26 | Archive manifest                                  | Uygulandı — first/last invoiceId dahil                                                               |
 | 27 | Checksum                                          | SHA-256 — event, S3 metadata, repository, log'lara yazılır                                           |
-| 28 | İşlem durumu takibi                               | `IArchiveBatchRepository` (InMemory) — PostgreSQL swap için abstraction hazır                        |
+| 28 | İşlem durumu takibi                               | `IArchiveBatchRepository` — `InMemory` + `Postgres` (Npgsql, UPSERT + AutoMigrate) implementasyonları |
 | 29 | ES silme sırası                                   | State machine ile korunuyor; `Verified → Deleted` geçişi MVP dışı (bkz. §17)                         |
 | 30 | Exactly-once problemi                             | At-least-once + idempotent operation — tüm bileşenlerde                                              |
 | 31 | MinIO                                             | `Storage.Provider=MinIO`, `ForcePathStyle=true`                                                      |
@@ -857,13 +872,26 @@ gitmeden önce ürün + platform ekibi ile netleştirilmeli.
 
 **Uygulama önerisi:** `EsRetentionPolicy` opsiyonu + ayrı bir `EsRetentionWorker` scheduled job.
 
-### 17.2 Persistent Status Store (§28)
+### 17.2 Persistent Status Store (§28) — **Uygulandı**
 
-Şu an `InMemoryArchiveBatchRepository`. Worker restart'ta state kaybolur.
+`IArchiveBatchRepository`'nin iki implementasyonu var:
 
-**Uygulama önerisi:** `IArchiveBatchRepository`'nin PostgreSQL implementasyonu. Şema
-analiz §28'deki `archive_batches` tablosu — id, batch_id, invoice_count, file_size,
-storage_path, status, retry_count, created_at, completed_at, error_message.
+| Provider    | Sınıf                                    | Kullanım                                        |
+|-------------|------------------------------------------|-------------------------------------------------|
+| `InMemory`  | `InMemoryArchiveBatchRepository`         | Varsayılan; test/dev. Restart'ta state kaybolur |
+| `Postgres`  | `PostgresArchiveBatchRepository` (Npgsql)| Production; UPSERT semantiği, DDL idempotent    |
+
+Seçim `Persistence:Provider` (InMemory / Postgres) ile yapılır. Postgres seçilirse
+`Persistence:ConnectionString` zorunludur (yoksa DI çözümlenirken
+`InvalidOperationException` fırlar).
+
+`Persistence:AutoMigrate=true` (varsayılan) iken repository ilk çağrıda
+`CREATE SCHEMA/TABLE IF NOT EXISTS` çalıştırır. DBA-managed provisioning için
+`db/postgres/001_archive_batches.sql` dosyası aynı DDL'i içerir; CI/CD pipeline'ından
+uygulanabilir ve `AutoMigrate=false` yapılabilir.
+
+Docker Compose'da `postgres:16-alpine` servisi 5432 portunda hazır; init script
+`db/postgres/*.sql` container start'ta otomatik uygulanır.
 
 ### 17.3 Arşivlenen Veri Formatı (§25)
 
