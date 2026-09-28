@@ -45,6 +45,8 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
         long approxUncompressed = 0;
         string? firstInvoiceId = null;
         string? lastInvoiceId = null;
+        DateTime? firstInvoiceCreatedAt = null;
+        DateTime? lastInvoiceCreatedAt = null;
         var limitReached = false;
 
         using (var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true))
@@ -69,6 +71,9 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
                 approxUncompressed += Encoding.UTF8.GetByteCount(invoice.Xml);
                 firstInvoiceId ??= invoice.InvoiceId;
                 lastInvoiceId = invoice.InvoiceId;
+                var createdAtUtc = DateTime.SpecifyKind(invoice.CreatedAt, DateTimeKind.Utc);
+                firstInvoiceCreatedAt ??= createdAtUtc;
+                lastInvoiceCreatedAt = createdAtUtc;
             }
 
             var manifest = new ArchiveManifest
@@ -80,6 +85,8 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
                 ArchiveVersion = 1,
                 FirstInvoiceId = firstInvoiceId,
                 LastInvoiceId = lastInvoiceId,
+                FirstInvoiceCreatedAt = firstInvoiceCreatedAt,
+                LastInvoiceCreatedAt = lastInvoiceCreatedAt,
                 TenantId = tenantId
             };
 
@@ -102,7 +109,15 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
             "BatchId={BatchId} ZIP built. InvoiceCount={InvoiceCount} SizeBytes={SizeBytes} LimitReached={LimitReached}",
             batchId, invoiceCount, sizeBytes, limitReached);
 
-        return new ZipBuildResult(invoiceCount, sizeBytes, sha256, firstInvoiceId, lastInvoiceId, limitReached);
+        return new ZipBuildResult(
+            invoiceCount,
+            sizeBytes,
+            sha256,
+            firstInvoiceId,
+            lastInvoiceId,
+            firstInvoiceCreatedAt,
+            lastInvoiceCreatedAt,
+            limitReached);
     }
 
     private static async Task<string> ComputeSha256Async(Stream stream, CancellationToken cancellationToken)

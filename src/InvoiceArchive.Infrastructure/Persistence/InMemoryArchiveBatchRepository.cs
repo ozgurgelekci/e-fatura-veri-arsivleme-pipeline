@@ -20,6 +20,24 @@ public sealed class InMemoryArchiveBatchRepository : IArchiveBatchRepository
         return Task.FromResult(found is null ? null : Clone(found));
     }
 
+    public Task<IReadOnlyList<ArchiveBatch>> FindByStatusCompletedBeforeAsync(
+        ArchiveStatus status,
+        DateTime completedBeforeUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var results = _store.Values
+            .Where(b => b.Status == status
+                        && b.CompletedAt.HasValue
+                        && b.CompletedAt.Value < completedBeforeUtc)
+            .OrderBy(b => b.CompletedAt!.Value)
+            .Take(limit)
+            .Select(Clone)
+            .ToList();
+
+        return Task.FromResult<IReadOnlyList<ArchiveBatch>>(results);
+    }
+
     private static ArchiveBatch Clone(ArchiveBatch b) => new()
     {
         BatchId = b.BatchId,
@@ -35,6 +53,8 @@ public sealed class InMemoryArchiveBatchRepository : IArchiveBatchRepository
         RetryCount = b.RetryCount,
         ErrorMessage = b.ErrorMessage,
         FirstInvoiceId = b.FirstInvoiceId,
-        LastInvoiceId = b.LastInvoiceId
+        LastInvoiceId = b.LastInvoiceId,
+        FirstInvoiceCreatedAt = b.FirstInvoiceCreatedAt,
+        LastInvoiceCreatedAt = b.LastInvoiceCreatedAt
     };
 }

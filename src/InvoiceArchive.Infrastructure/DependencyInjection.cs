@@ -4,6 +4,7 @@ using InvoiceArchive.Infrastructure.Configuration;
 using InvoiceArchive.Infrastructure.Elasticsearch;
 using InvoiceArchive.Infrastructure.Kafka;
 using InvoiceArchive.Infrastructure.Persistence;
+using InvoiceArchive.Infrastructure.Retention;
 using InvoiceArchive.Infrastructure.Storage;
 using InvoiceArchive.Infrastructure.Zip;
 using Microsoft.Extensions.Configuration;
@@ -52,6 +53,7 @@ public static class DependencyInjection
         services.AddSingleton<ArchiveService>();
         services.AddSingleton<BatchProcessor>();
         services.AddSingleton<KafkaArchiveEventConsumer>();
+        services.AddSingleton<IArchivedInvoiceReaper, ElasticsearchInvoiceReaper>();
 
         AddArchiveBatchRepository(services, configuration);
 

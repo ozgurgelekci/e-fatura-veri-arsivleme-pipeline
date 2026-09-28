@@ -9,5 +9,7 @@ public sealed class ArchiveManifest
     public int ArchiveVersion { get; init; } = 1;
     public string? FirstInvoiceId { get; init; }
     public string? LastInvoiceId { get; init; }
+    public DateTime? FirstInvoiceCreatedAt { get; init; }
+    public DateTime? LastInvoiceCreatedAt { get; init; }
     public string? TenantId { get; init; }
 }

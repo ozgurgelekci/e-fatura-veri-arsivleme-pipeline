@@ -16,4 +16,6 @@ public sealed class ArchiveBatch
     public string? ErrorMessage { get; set; }
     public string? FirstInvoiceId { get; set; }
     public string? LastInvoiceId { get; set; }
+    public DateTime? FirstInvoiceCreatedAt { get; set; }
+    public DateTime? LastInvoiceCreatedAt { get; set; }
 }

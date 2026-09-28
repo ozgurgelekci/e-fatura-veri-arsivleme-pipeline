@@ -20,5 +20,7 @@ public sealed record ZipBuildResult(
     string Sha256,
     string? FirstInvoiceId,
     string? LastInvoiceId,
+    DateTime? FirstInvoiceCreatedAt,
+    DateTime? LastInvoiceCreatedAt,
     bool LimitReached
 );

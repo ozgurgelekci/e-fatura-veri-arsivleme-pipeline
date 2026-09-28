@@ -57,9 +57,15 @@ public sealed class StorageStatusWorker : BackgroundService
             StoragePath = evt.Path,
             InvoiceCount = evt.InvoiceCount,
             SizeInBytes = evt.Size,
-            Sha256 = evt.Sha256
+            Sha256 = evt.Sha256,
+            FirstInvoiceId = evt.FirstInvoiceId,
+            LastInvoiceId = evt.LastInvoiceId,
+            FirstInvoiceCreatedAt = evt.FirstInvoiceCreatedAt,
+            LastInvoiceCreatedAt = evt.LastInvoiceCreatedAt
         };
 
+        batch.FirstInvoiceCreatedAt ??= evt.FirstInvoiceCreatedAt;
+        batch.LastInvoiceCreatedAt ??= evt.LastInvoiceCreatedAt;
         batch.Status = ArchiveStatus.Verified;
         batch.CompletedAt = _time.GetUtcNow().UtcDateTime;
         await _repository.SaveAsync(batch, cancellationToken).ConfigureAwait(false);

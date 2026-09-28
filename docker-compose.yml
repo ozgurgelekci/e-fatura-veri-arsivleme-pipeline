@@ -170,3 +170,26 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
+
+  retention-worker:
+    build:
+      context: .
+      dockerfile: src/InvoiceArchive.RetentionWorker/Dockerfile
+    container_name: invoice-archive-retention-worker
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - Retention__Enabled=false
+      - Retention__DryRun=true
+    ports:
+      - "8082:8082"
+    networks: [invoice-archive]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health/live >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6

@@ -94,8 +94,9 @@ Pending → Archiving → Uploaded → Verified → (Deleted)
                           └─► Failed
 ```
 
-*Verified → Deleted* geçişi (Elasticsearch'ten silme) analiz §29 gereği **kritik karar**
-olarak MVP dışında bırakılmıştır (bkz. bölüm 17).
+*Verified → Deleted* geçişi (Elasticsearch'ten silme) ayrı bir `InvoiceArchive.RetentionWorker`
+servisiyle yapılır; güvenlik anahtarları (`Retention:Enabled=false`, `Retention:DryRun=true`)
+default olarak kapalıdır. Detay için bkz. §17.1.
 
 ---
 
@@ -150,6 +151,11 @@ src/
 │   ├── Program.cs
 │   └── Dockerfile
 │
+├── InvoiceArchive.RetentionWorker      BackgroundService (Verified → Deleted, feature-flagged)
+│   ├── RetentionWorker.cs              Grace period + S3 re-verify + delete_by_query
+│   ├── Program.cs
+│   └── Dockerfile
+│
 └── InvoiceArchive.DlqReplay            Console tool — DLQ mesajlarını orijinal topic'e replay eder
     ├── Program.cs
     └── ReplayOptions.cs
@@ -162,7 +168,7 @@ tests/
     ├── DefaultStorageKeyBuilderTests.cs
     └── Fakes/                          FakeStorage, FakeEventPublisher
 
-docker-compose.yml                      ES 8.15 + Kafka 3.7 (KRaft) + MinIO + worker + consumer
+docker-compose.yml                      ES 8.15 + Kafka 3.7 (KRaft) + MinIO + Postgres + worker + consumer + retention-worker
 ```
 
 **Katman kuralları** (analiz §20):
@@ -329,7 +335,7 @@ Pending → Archiving → Uploaded → Verified → Deleted
 
 - `Uploaded` = worker ZIP'i S3'e yazdı + Kafka event publish etti.
 - `Verified` = StorageConsumer S3 objesini HEAD ile doğruladı.
-- `Deleted` = ES kayıtları silindi (MVP dışı — bkz. bölüm 17).
+- `Deleted` = `RetentionWorker` grace period sonrası ES kayıtlarını sildi (§17.1).
 - `Failed` = herhangi bir adımda exception; `ArchiveFailedEvent` publish edilir.
 
 **S3 upload başarılı olmadan ES'ten silme YAPILMAMALIDIR.** State machine bu kuralı zorlar.
@@ -659,13 +665,26 @@ konfigürasyon **host boot sırasında** `OptionsValidationException` fırlatır
 
 | Anahtar   | Varsayılan                                       | Açıklama                                        |
 |-----------|--------------------------------------------------|-------------------------------------------------|
-| `Port`    | `8080` (Worker) / `8081` (StorageConsumer)       | HttpListener bind portu                         |
+| `Port`    | `8080` (Worker) / `8081` (StorageConsumer) / `8082` (RetentionWorker) | HttpListener bind portu    |
 
 Endpoints: `/health/live` (her zaman 200) ve `/health/ready` (tüm probe'lar sağlıklıysa 200,
 biri bile başarısızsa 503). Cevap gövdesi `{ status, checks: { name: { status, detail? } } }`
 formatında JSON.
 
-### 11.6 `Kafka` bölümü
+### 11.6 `Retention` bölümü (yalnızca `RetentionWorker`)
+
+| Anahtar                     | Varsayılan          | Açıklama                                                              |
+|-----------------------------|---------------------|-----------------------------------------------------------------------|
+| `Enabled`                   | `false`             | Servis açık olsa bile taramayı başlatır                               |
+| `DryRun`                    | `true`              | Silmeyi denemez, sadece `count` çeker ve log basar                    |
+| `RequireS3ObjectExists`     | `true`              | Silme öncesi S3 objesi HEAD ile doğrulanır                            |
+| `IndexName`                 | `invoices`          | ES index adı                                                          |
+| `BucketName`                | `invoice-archive`   | S3 doğrulama için bucket                                              |
+| `MinAgeAfterVerifiedDays`   | `30`                | Batch Verified olduktan sonra beklenmesi gereken gün sayısı           |
+| `PollIntervalMinutes`       | `60`                | Taramalar arası bekleme                                               |
+| `BatchesPerRun`             | `50`                | Bir tarama turunda alınan aday batch üst sınırı                       |
+
+### 11.7 `Kafka` bölümü
 
 | Anahtar                        | Varsayılan                          | Açıklama                             |
 |--------------------------------|-------------------------------------|--------------------------------------|
@@ -692,8 +711,9 @@ formatında JSON.
 | `minio`           | `minio/minio:RELEASE.2025-01-20T14-49-07Z`    | 9000 (API) / 9001 (Console) | S3 uyumlu storage              |
 | `minio-init`      | `minio/mc:RELEASE.2025-01-17T23-25-50Z`       | —                 | Startup'ta `invoice-archive` bucket'ı oluşturur |
 | `postgres`        | `postgres:16-alpine`                          | 5432              | Persistent archive_batches store (Postgres provider) |
-| `archive-worker`  | build `src/InvoiceArchive.Worker/Dockerfile`  | 9464              | ES → ZIP → S3 → Kafka                    |
-| `storage-consumer`| build `src/InvoiceArchive.StorageConsumer/Dockerfile` | —         | Kafka → S3 verify → Verified/DLQ         |
+| `archive-worker`  | build `src/InvoiceArchive.Worker/Dockerfile`  | 9464, 8080        | ES → ZIP → S3 → Kafka                    |
+| `storage-consumer`| build `src/InvoiceArchive.StorageConsumer/Dockerfile` | 8081       | Kafka → S3 verify → Verified/DLQ         |
+| `retention-worker`| build `src/InvoiceArchive.RetentionWorker/Dockerfile` | 8082       | Verified → Deleted (DryRun default)      |
 
 Kafka listener yapısı:
 
@@ -817,7 +837,7 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 
 ## 15. Testler
 
-`tests/InvoiceArchive.Tests` içinde 24 xUnit testi:
+`tests/InvoiceArchive.Tests` içinde 34 xUnit testi:
 
 | Test                                                                              | Doğruladığı davranış                                                          |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
@@ -845,6 +865,16 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 | `ReplayOptionsTests.Returns_null_on_unknown_flag`                                 | Bilinmeyen argüman → null (usage yazdırılır)                                  |
 | `ReplayOptionsTests.Returns_null_on_missing_value_for_flag`                       | `--bootstrap` için değer verilmediğinde null                                  |
 | `ReplayOptionsTests.Returns_null_on_non_integer_max`                              | `--max abc` gibi geçersiz sayı → null                                         |
+| `InMemoryArchiveBatchRepositoryTests.FindByStatusCompletedBefore_returns_only_matching_status_and_cutoff` | Sadece istenen status + cutoff'tan önceki + `CompletedAt` dolu kayıtlar |
+| `InMemoryArchiveBatchRepositoryTests.FindByStatusCompletedBefore_respects_limit_and_orders_by_completed_at` | Limit uygulanır ve sonuç `CompletedAt` ASC sıralı                        |
+| `RetentionOptionsValidationTests.Defaults_are_valid_and_safe`                     | Default değerler valid + `Enabled=false`, `DryRun=true`, `RequireS3ObjectExists=true` |
+| `RetentionOptionsValidationTests.Invalid_min_age_fails_validation`                | `MinAgeAfterVerifiedDays=0` → DataAnnotations hatası                          |
+| `RetentionOptionsValidationTests.Empty_index_name_fails_validation`               | `IndexName=""` → DataAnnotations hatası                                       |
+| `RetentionWorkerTests.DryRun_calls_reaper_but_does_not_mutate_status`             | `DryRun=true` iken reaper çağrılır, batch status `Verified` kalır             |
+| `RetentionWorkerTests.Not_dry_run_marks_batch_as_deleted_after_reap`              | Gerçek reap sonrası batch `ArchiveStatus.Deleted` olur                        |
+| `RetentionWorkerTests.Missing_s3_object_skips_reap_when_required`                 | `RequireS3ObjectExists=true` ve S3 boş → reap atlanır                         |
+| `RetentionWorkerTests.Skips_batch_without_last_invoice_created_at`                | Eski/pre-retention batch (`LastInvoiceCreatedAt=null`) reap edilmez           |
+| `RetentionWorkerTests.Skips_when_within_grace_period`                             | `CompletedAt` cutoff'tan yeni olan batch aday listesine girmez                |
 
 Çalıştırma:
 
@@ -882,7 +912,7 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 | 17 | Dead Letter Queue                                 | `KafkaArchiveEventConsumer` fail → `invoice.archive.dlq`                                             |
 | 18 | Kafka topic tasarımı                              | Analiz §18'deki 3-topic ayrımı uygulandı + DLQ                                                       |
 | 19 | Partition tasarımı                                | Publisher `tenantId ?? batchId` üzerinden partition key belirler                                     |
-| 20 | .NET 8 katmanlı yapı                              | Domain / Contracts / Application / Infrastructure / Worker / StorageConsumer                         |
+| 20 | .NET 8 katmanlı yapı                              | Domain / Contracts / Application / Infrastructure / Worker / StorageConsumer / RetentionWorker / DlqReplay |
 | 21 | Domain model                                      | `ArchiveBatch` + `ArchiveStatus`                                                                     |
 | 22 | Archive worker algoritması                        | `BatchProcessor` — producer/consumer, `Channel<ArchiveJob>` + N consumer                             |
 | 23 | Concurrency                                       | `MaxConcurrency` opsiyonu — N consumer paralel `ProcessBatchAsync`                                   |
@@ -891,7 +921,7 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 | 26 | Archive manifest                                  | Uygulandı — first/last invoiceId dahil                                                               |
 | 27 | Checksum                                          | SHA-256 — event, S3 metadata, repository, log'lara yazılır                                           |
 | 28 | İşlem durumu takibi                               | `IArchiveBatchRepository` — `InMemory` + `Postgres` (Npgsql, UPSERT + AutoMigrate) implementasyonları |
-| 29 | ES silme sırası                                   | State machine ile korunuyor; `Verified → Deleted` geçişi MVP dışı (bkz. §17)                         |
+| 29 | ES silme sırası                                   | State machine ile korunuyor; `Verified → Deleted` geçişi ayrı `RetentionWorker` (§17.1, DryRun default) |
 | 30 | Exactly-once problemi                             | At-least-once + idempotent operation — tüm bileşenlerde                                              |
 | 31 | MinIO                                             | `Storage.Provider=MinIO`, `ForcePathStyle=true`                                                      |
 | 32 | Docker Compose                                    | ES + Kafka (KRaft) + MinIO + worker + consumer                                                       |
@@ -913,18 +943,35 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 Analiz §41'de listelenen açık kararlar. MVP'de placeholder olarak bırakıldı — production'a
 gitmeden önce ürün + platform ekibi ile netleştirilmeli.
 
-### 17.1 Elasticsearch Silme (§29)
+### 17.1 Elasticsearch Silme (§29) — **Uygulandı (feature-flagged, DryRun default)**
 
-`ArchiveStatus.Deleted` state'i tanımlı ama `Verified → Deleted` geçişi implement edilmedi.
+`Verified → Deleted` geçişi ayrı bir `InvoiceArchive.RetentionWorker` servisi üzerinden
+yapılır. Yıkıcı bir operasyon olduğu için tüm güvenlik anahtarları **kapalı** başlar:
 
-**Neden:** Silme yıkıcı ve geri döndürülemez. En az şu soruların cevabı gerekli:
+| Ayar                                | Varsayılan | Anlamı                                                        |
+|-------------------------------------|------------|---------------------------------------------------------------|
+| `Retention:Enabled`                 | `false`    | Servis çalışsa bile tarama başlatmaz                          |
+| `Retention:DryRun`                  | `true`     | `count` çeker, `delete_by_query` çekmez; sadece log basar     |
+| `Retention:RequireS3ObjectExists`   | `true`     | ES silmeden önce ilgili S3 objesi HEAD ile doğrulanır         |
+| `Retention:MinAgeAfterVerifiedDays` | `30`       | Batch Verified olduktan sonra geçmesi gereken grace period    |
+| `Retention:BatchesPerRun`           | `50`       | Bir tarama turunda incelenen batch üst sınırı                 |
+| `Retention:PollIntervalMinutes`     | `60`       | Taramalar arası bekleme                                       |
+| `Retention:IndexName`               | `invoices` | Silme uygulanacak ES index                                    |
+| `Retention:BucketName`              | `invoice-archive` | S3 doğrulaması için bucket                             |
 
-- Silme hemen mi, yoksa T+N gün sonra mı?
-- Silme başarısız olursa retry politikası ne?
+Silme sorgusu invoice sınırlarına daraltılır:
+`tenantId = batch.TenantId AND createdAt BETWEEN batch.FirstInvoiceCreatedAt AND batch.LastInvoiceCreatedAt`,
+ek olarak `max_docs = batch.InvoiceCount` cap'i eklenir. Bu iki alan (`first_invoice_created_at`,
+`last_invoice_created_at`) domain'e ve repository şemasına eklendi; ZIP builder her batch için
+doldurur, `ArchiveCreatedEvent` ile StorageConsumer'a taşınır.
+
+Reaper başarılı olursa worker `ArchiveStatus.Deleted` yazar. DryRun modda status değişmez.
+
+**Netleştirilmesi gereken açık konular** (production'a geçmeden önce):
+
 - Legal hold / audit gereği bazı invoice'lar hiç silinmemeli mi?
-- Silme öncesi S3 objesinin **replicated + versioned** olduğu doğrulanmalı mı?
-
-**Uygulama önerisi:** `EsRetentionPolicy` opsiyonu + ayrı bir `EsRetentionWorker` scheduled job.
+- Silme öncesi S3 objesinin **replicated + versioned** olduğu ayrıca doğrulanmalı mı?
+- `MinAgeAfterVerifiedDays` için üründen ne gelmeli (30/90/365)?
 
 ### 17.2 Persistent Status Store (§28) — **Uygulandı**
 

@@ -101,6 +101,8 @@ public sealed class ArchiveService
             batch.Sha256 = buildResult.Sha256;
             batch.FirstInvoiceId = buildResult.FirstInvoiceId;
             batch.LastInvoiceId = buildResult.LastInvoiceId;
+            batch.FirstInvoiceCreatedAt = buildResult.FirstInvoiceCreatedAt;
+            batch.LastInvoiceCreatedAt = buildResult.LastInvoiceCreatedAt;
 
             var alreadyThere = await _storage.ObjectExistsAsync(
                 options.BucketName,
@@ -162,7 +164,9 @@ public sealed class ArchiveService
                 CreatedAt = batch.CompletedAt.Value,
                 TenantId = tenantId,
                 FirstInvoiceId = buildResult.FirstInvoiceId,
-                LastInvoiceId = buildResult.LastInvoiceId
+                LastInvoiceId = buildResult.LastInvoiceId,
+                FirstInvoiceCreatedAt = buildResult.FirstInvoiceCreatedAt,
+                LastInvoiceCreatedAt = buildResult.LastInvoiceCreatedAt
             }, cancellationToken).ConfigureAwait(false);
 
             stopwatch.Stop();

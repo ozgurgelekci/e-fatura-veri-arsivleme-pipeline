@@ -5,6 +5,7 @@
     <Project Path="src/InvoiceArchive.DlqReplay/InvoiceArchive.DlqReplay.csproj" />
     <Project Path="src/InvoiceArchive.Domain/InvoiceArchive.Domain.csproj" />
     <Project Path="src/InvoiceArchive.Infrastructure/InvoiceArchive.Infrastructure.csproj" />
+    <Project Path="src/InvoiceArchive.RetentionWorker/InvoiceArchive.RetentionWorker.csproj" />
     <Project Path="src/InvoiceArchive.StorageConsumer/InvoiceArchive.StorageConsumer.csproj" />
     <Project Path="src/InvoiceArchive.Worker/InvoiceArchive.Worker.csproj" />
   </Folder>

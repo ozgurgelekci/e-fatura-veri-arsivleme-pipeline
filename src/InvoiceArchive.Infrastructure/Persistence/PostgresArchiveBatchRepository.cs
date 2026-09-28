@@ -34,11 +34,13 @@ public sealed class PostgresArchiveBatchRepository : IArchiveBatchRepository
         var sql = $@"
 INSERT INTO {QualifiedTable} (
     batch_id, tenant_id, invoice_count, size_in_bytes, file_name, storage_path,
-    sha256, first_invoice_id, last_invoice_id, status, retry_count, error_message,
+    sha256, first_invoice_id, last_invoice_id, first_invoice_created_at, last_invoice_created_at,
+    status, retry_count, error_message,
     created_at, completed_at
 ) VALUES (
     @batch_id, @tenant_id, @invoice_count, @size_in_bytes, @file_name, @storage_path,
-    @sha256, @first_invoice_id, @last_invoice_id, @status, @retry_count, @error_message,
+    @sha256, @first_invoice_id, @last_invoice_id, @first_invoice_created_at, @last_invoice_created_at,
+    @status, @retry_count, @error_message,
     @created_at, @completed_at
 )
 ON CONFLICT (batch_id) DO UPDATE SET
@@ -50,6 +52,8 @@ ON CONFLICT (batch_id) DO UPDATE SET
     sha256 = EXCLUDED.sha256,
     first_invoice_id = EXCLUDED.first_invoice_id,
     last_invoice_id = EXCLUDED.last_invoice_id,
+    first_invoice_created_at = EXCLUDED.first_invoice_created_at,
+    last_invoice_created_at = EXCLUDED.last_invoice_created_at,
     status = EXCLUDED.status,
     retry_count = EXCLUDED.retry_count,
     error_message = EXCLUDED.error_message,
@@ -65,6 +69,18 @@ ON CONFLICT (batch_id) DO UPDATE SET
         cmd.Parameters.Add(new NpgsqlParameter("sha256", NpgsqlDbType.Text) { Value = (object?)batch.Sha256 ?? DBNull.Value });
         cmd.Parameters.Add(new NpgsqlParameter("first_invoice_id", NpgsqlDbType.Text) { Value = (object?)batch.FirstInvoiceId ?? DBNull.Value });
         cmd.Parameters.Add(new NpgsqlParameter("last_invoice_id", NpgsqlDbType.Text) { Value = (object?)batch.LastInvoiceId ?? DBNull.Value });
+        cmd.Parameters.Add(new NpgsqlParameter("first_invoice_created_at", NpgsqlDbType.TimestampTz)
+        {
+            Value = batch.FirstInvoiceCreatedAt.HasValue
+                ? DateTime.SpecifyKind(batch.FirstInvoiceCreatedAt.Value, DateTimeKind.Utc)
+                : DBNull.Value
+        });
+        cmd.Parameters.Add(new NpgsqlParameter("last_invoice_created_at", NpgsqlDbType.TimestampTz)
+        {
+            Value = batch.LastInvoiceCreatedAt.HasValue
+                ? DateTime.SpecifyKind(batch.LastInvoiceCreatedAt.Value, DateTimeKind.Utc)
+                : DBNull.Value
+        });
         cmd.Parameters.Add(new NpgsqlParameter("status", NpgsqlDbType.Smallint) { Value = (short)batch.Status });
         cmd.Parameters.Add(new NpgsqlParameter("retry_count", NpgsqlDbType.Integer) { Value = batch.RetryCount });
         cmd.Parameters.Add(new NpgsqlParameter("error_message", NpgsqlDbType.Text) { Value = (object?)batch.ErrorMessage ?? DBNull.Value });
@@ -85,7 +101,8 @@ ON CONFLICT (batch_id) DO UPDATE SET
 
         var sql = $@"
 SELECT batch_id, tenant_id, invoice_count, size_in_bytes, file_name, storage_path,
-       sha256, first_invoice_id, last_invoice_id, status, retry_count, error_message,
+       sha256, first_invoice_id, last_invoice_id, first_invoice_created_at, last_invoice_created_at,
+       status, retry_count, error_message,
        created_at, completed_at
 FROM {QualifiedTable}
 WHERE batch_id = @batch_id;";
@@ -99,24 +116,65 @@ WHERE batch_id = @batch_id;";
             return null;
         }
 
-        return new ArchiveBatch
-        {
-            BatchId = reader.GetString(0),
-            TenantId = reader.IsDBNull(1) ? null : reader.GetString(1),
-            InvoiceCount = reader.GetInt32(2),
-            SizeInBytes = reader.GetInt64(3),
-            FileName = reader.IsDBNull(4) ? default! : reader.GetString(4),
-            StoragePath = reader.IsDBNull(5) ? default! : reader.GetString(5),
-            Sha256 = reader.IsDBNull(6) ? null : reader.GetString(6),
-            FirstInvoiceId = reader.IsDBNull(7) ? null : reader.GetString(7),
-            LastInvoiceId = reader.IsDBNull(8) ? null : reader.GetString(8),
-            Status = (ArchiveStatus)reader.GetInt16(9),
-            RetryCount = reader.GetInt32(10),
-            ErrorMessage = reader.IsDBNull(11) ? null : reader.GetString(11),
-            CreatedAt = DateTime.SpecifyKind(reader.GetDateTime(12), DateTimeKind.Utc),
-            CompletedAt = reader.IsDBNull(13) ? null : DateTime.SpecifyKind(reader.GetDateTime(13), DateTimeKind.Utc)
-        };
+        return MapRow(reader);
     }
+
+    public async Task<IReadOnlyList<ArchiveBatch>> FindByStatusCompletedBeforeAsync(
+        ArchiveStatus status,
+        DateTime completedBeforeUtc,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+        var sql = $@"
+SELECT batch_id, tenant_id, invoice_count, size_in_bytes, file_name, storage_path,
+       sha256, first_invoice_id, last_invoice_id, first_invoice_created_at, last_invoice_created_at,
+       status, retry_count, error_message,
+       created_at, completed_at
+FROM {QualifiedTable}
+WHERE status = @status
+  AND completed_at IS NOT NULL
+  AND completed_at < @completed_before
+ORDER BY completed_at ASC
+LIMIT @limit;";
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        cmd.Parameters.Add(new NpgsqlParameter("status", NpgsqlDbType.Smallint) { Value = (short)status });
+        cmd.Parameters.Add(new NpgsqlParameter("completed_before", NpgsqlDbType.TimestampTz)
+        {
+            Value = DateTime.SpecifyKind(completedBeforeUtc, DateTimeKind.Utc)
+        });
+        cmd.Parameters.Add(new NpgsqlParameter("limit", NpgsqlDbType.Integer) { Value = limit });
+
+        var results = new List<ArchiveBatch>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(MapRow(reader));
+        }
+        return results;
+    }
+
+    private static ArchiveBatch MapRow(NpgsqlDataReader reader) => new()
+    {
+        BatchId = reader.GetString(0),
+        TenantId = reader.IsDBNull(1) ? null : reader.GetString(1),
+        InvoiceCount = reader.GetInt32(2),
+        SizeInBytes = reader.GetInt64(3),
+        FileName = reader.IsDBNull(4) ? default! : reader.GetString(4),
+        StoragePath = reader.IsDBNull(5) ? default! : reader.GetString(5),
+        Sha256 = reader.IsDBNull(6) ? null : reader.GetString(6),
+        FirstInvoiceId = reader.IsDBNull(7) ? null : reader.GetString(7),
+        LastInvoiceId = reader.IsDBNull(8) ? null : reader.GetString(8),
+        FirstInvoiceCreatedAt = reader.IsDBNull(9) ? null : DateTime.SpecifyKind(reader.GetDateTime(9), DateTimeKind.Utc),
+        LastInvoiceCreatedAt = reader.IsDBNull(10) ? null : DateTime.SpecifyKind(reader.GetDateTime(10), DateTimeKind.Utc),
+        Status = (ArchiveStatus)reader.GetInt16(11),
+        RetryCount = reader.GetInt32(12),
+        ErrorMessage = reader.IsDBNull(13) ? null : reader.GetString(13),
+        CreatedAt = DateTime.SpecifyKind(reader.GetDateTime(14), DateTimeKind.Utc),
+        CompletedAt = reader.IsDBNull(15) ? null : DateTime.SpecifyKind(reader.GetDateTime(15), DateTimeKind.Utc)
+    };
 
     private string QualifiedTable => $"\"{_options.SchemaName}\".\"{_options.TableName}\"";
 
@@ -139,23 +197,31 @@ WHERE batch_id = @batch_id;";
             var ddl = $@"
 CREATE SCHEMA IF NOT EXISTS ""{_options.SchemaName}"";
 CREATE TABLE IF NOT EXISTS {QualifiedTable} (
-    batch_id          TEXT PRIMARY KEY,
-    tenant_id         TEXT NULL,
-    invoice_count     INTEGER NOT NULL DEFAULT 0,
-    size_in_bytes     BIGINT NOT NULL DEFAULT 0,
-    file_name         TEXT NULL,
-    storage_path      TEXT NULL,
-    sha256            TEXT NULL,
-    first_invoice_id  TEXT NULL,
-    last_invoice_id   TEXT NULL,
-    status            SMALLINT NOT NULL DEFAULT 0,
-    retry_count       INTEGER NOT NULL DEFAULT 0,
-    error_message     TEXT NULL,
-    created_at        TIMESTAMPTZ NOT NULL,
-    completed_at      TIMESTAMPTZ NULL
+    batch_id                 TEXT PRIMARY KEY,
+    tenant_id                TEXT NULL,
+    invoice_count            INTEGER NOT NULL DEFAULT 0,
+    size_in_bytes            BIGINT NOT NULL DEFAULT 0,
+    file_name                TEXT NULL,
+    storage_path             TEXT NULL,
+    sha256                   TEXT NULL,
+    first_invoice_id         TEXT NULL,
+    last_invoice_id          TEXT NULL,
+    first_invoice_created_at TIMESTAMPTZ NULL,
+    last_invoice_created_at  TIMESTAMPTZ NULL,
+    status                   SMALLINT NOT NULL DEFAULT 0,
+    retry_count              INTEGER NOT NULL DEFAULT 0,
+    error_message            TEXT NULL,
+    created_at               TIMESTAMPTZ NOT NULL,
+    completed_at             TIMESTAMPTZ NULL
 );
+ALTER TABLE {QualifiedTable}
+    ADD COLUMN IF NOT EXISTS first_invoice_created_at TIMESTAMPTZ NULL;
+ALTER TABLE {QualifiedTable}
+    ADD COLUMN IF NOT EXISTS last_invoice_created_at TIMESTAMPTZ NULL;
 CREATE INDEX IF NOT EXISTS ix_{_options.TableName}_status
     ON {QualifiedTable} (status);
+CREATE INDEX IF NOT EXISTS ix_{_options.TableName}_status_completed
+    ON {QualifiedTable} (status, completed_at);
 CREATE INDEX IF NOT EXISTS ix_{_options.TableName}_tenant_created
     ON {QualifiedTable} (tenant_id, created_at DESC);";
 

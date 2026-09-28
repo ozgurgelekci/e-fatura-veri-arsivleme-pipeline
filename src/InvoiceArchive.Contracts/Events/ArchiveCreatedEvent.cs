@@ -15,4 +15,6 @@ public sealed record ArchiveCreatedEvent
     public string? TenantId { get; init; }
     public string? FirstInvoiceId { get; init; }
     public string? LastInvoiceId { get; init; }
+    public DateTime? FirstInvoiceCreatedAt { get; init; }
+    public DateTime? LastInvoiceCreatedAt { get; init; }
 }
