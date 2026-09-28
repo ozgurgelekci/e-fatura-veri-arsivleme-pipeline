@@ -16,5 +16,5 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
 ENV DOTNET_ENVIRONMENT=Production
-EXPOSE 9464
+EXPOSE 9464 8080
 ENTRYPOINT ["dotnet", "InvoiceArchive.Worker.dll"]

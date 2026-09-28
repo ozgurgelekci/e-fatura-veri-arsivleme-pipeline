@@ -16,4 +16,5 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
 ENV DOTNET_ENVIRONMENT=Production
+EXPOSE 8081
 ENTRYPOINT ["dotnet", "InvoiceArchive.StorageConsumer.dll"]

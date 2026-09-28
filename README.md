@@ -621,7 +621,17 @@ konfigürasyon **host boot sırasında** `OptionsValidationException` fırlatır
 | `TableName`         | `archive_batches`   | Tablo adı                                                   |
 | `AutoMigrate`       | `true`              | `true` ise ilk çağrıda `CREATE SCHEMA/TABLE IF NOT EXISTS`  |
 
-### 11.5 `Kafka` bölümü
+### 11.5 `Health` bölümü
+
+| Anahtar   | Varsayılan                                       | Açıklama                                        |
+|-----------|--------------------------------------------------|-------------------------------------------------|
+| `Port`    | `8080` (Worker) / `8081` (StorageConsumer)       | HttpListener bind portu                         |
+
+Endpoints: `/health/live` (her zaman 200) ve `/health/ready` (tüm probe'lar sağlıklıysa 200,
+biri bile başarısızsa 503). Cevap gövdesi `{ status, checks: { name: { status, detail? } } }`
+formatında JSON.
+
+### 11.6 `Kafka` bölümü
 
 | Anahtar                        | Varsayılan                          | Açıklama                             |
 |--------------------------------|-------------------------------------|--------------------------------------|
@@ -690,6 +700,8 @@ docker compose up --build archive-worker storage-consumer
 | MinIO API        | http://localhost:9000                 |
 | MinIO Console    | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 | Worker /metrics  | http://localhost:9464/metrics         |
+| Worker /health   | http://localhost:8080/health/live and /health/ready |
+| Consumer /health | http://localhost:8081/health/live and /health/ready |
 
 ---
 
@@ -771,7 +783,7 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 
 ## 15. Testler
 
-`tests/InvoiceArchive.Tests` içinde 16 xUnit testi:
+`tests/InvoiceArchive.Tests` içinde 19 xUnit testi:
 
 | Test                                                                              | Doğruladığı davranış                                                          |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
@@ -791,6 +803,9 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 | `ArchiveBatchRepositoryDependencyInjectionTests.Registers_in_memory_repository_when_provider_is_in_memory` | `Provider=InMemory` → `InMemoryArchiveBatchRepository`                     |
 | `ArchiveBatchRepositoryDependencyInjectionTests.Registers_postgres_repository_when_provider_is_postgres` | `Provider=Postgres` + `ConnectionString` → `PostgresArchiveBatchRepository` |
 | `ArchiveBatchRepositoryDependencyInjectionTests.Postgres_provider_without_connection_string_throws_at_resolve` | `Provider=Postgres` ama `ConnectionString` yoksa `InvalidOperationException` |
+| `HealthCheckServerTests.Live_endpoint_returns_200_even_when_dependencies_unhealthy` | `/health/live` bağımlılık durumundan bağımsız 200 döner                       |
+| `HealthCheckServerTests.Ready_endpoint_returns_200_when_all_checks_healthy`       | Tüm probe'lar `Healthy` → `/health/ready` 200                                 |
+| `HealthCheckServerTests.Ready_endpoint_returns_503_when_any_check_fails`          | Bir probe fail olursa `/health/ready` 503 ve detay JSON gövdede               |
 
 Çalıştırma:
 

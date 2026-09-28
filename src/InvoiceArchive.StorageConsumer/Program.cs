@@ -1,5 +1,6 @@
 using InvoiceArchive.Application.Configuration;
 using InvoiceArchive.Infrastructure;
+using InvoiceArchive.Infrastructure.Health;
 using InvoiceArchive.StorageConsumer;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +27,10 @@ try
         .ValidateOnStart();
 
     builder.Services.AddInvoiceArchiveInfrastructure(builder.Configuration);
+
+    var healthPort = builder.Configuration.GetValue<int?>("Health:Port") ?? 8081;
+    builder.Services.AddInvoiceArchiveHealthChecks(builder.Configuration, healthPort);
+
     builder.Services.AddHostedService<StorageStatusWorker>();
 
     var host = builder.Build();

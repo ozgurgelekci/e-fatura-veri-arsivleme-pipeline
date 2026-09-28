@@ -142,7 +142,13 @@ services:
       - Archive__RunOnceAndExit=true
     ports:
       - "9464:9464"
+      - "8080:8080"
     networks: [invoice-archive]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/live >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
 
   storage-consumer:
     build:
@@ -156,4 +162,11 @@ services:
         condition: service_healthy
     environment:
       - DOTNET_ENVIRONMENT=Production
+    ports:
+      - "8081:8081"
     networks: [invoice-archive]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health/live >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6

@@ -1,6 +1,7 @@
 using InvoiceArchive.Application.Abstractions;
 using InvoiceArchive.Application.Configuration;
 using InvoiceArchive.Infrastructure;
+using InvoiceArchive.Infrastructure.Health;
 using InvoiceArchive.Worker;
 using InvoiceArchive.Worker.Metrics;
 using Microsoft.Extensions.Configuration;
@@ -33,6 +34,9 @@ try
 
     builder.Services.AddInvoiceArchiveInfrastructure(builder.Configuration);
     builder.Services.Replace(ServiceDescriptor.Singleton<IArchiveMetrics, PrometheusArchiveMetrics>());
+
+    var healthPort = builder.Configuration.GetValue<int?>("Health:Port") ?? 8080;
+    builder.Services.AddInvoiceArchiveHealthChecks(builder.Configuration, healthPort);
 
     builder.Services.AddHostedService<MetricServerHostedService>();
     builder.Services.AddHostedService<ArchiveWorker>();
