@@ -12,4 +12,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj" />
   </Folder>
+  <Folder Name="/bench/">
+    <Project Path="bench/InvoiceArchive.Bench/InvoiceArchive.Bench.csproj" />
+  </Folder>
 </Solution>

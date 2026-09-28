@@ -168,6 +168,11 @@ tests/
     ├── DefaultStorageKeyBuilderTests.cs
     └── Fakes/                          FakeStorage, FakeEventPublisher
 
+bench/
+└── InvoiceArchive.Bench                Console — ZIP micro-bench + BatchProcessor concurrency sweep
+    ├── Program.cs                      zip | pipeline | sweep alt komutları
+    └── Fakes/                          GeneratedInvoiceReader, NoopStorage, NoopEventPublisher
+
 docker-compose.yml                      ES 8.15 + Kafka 3.7 (KRaft) + MinIO + Postgres + worker + consumer + retention-worker
 ```
 
@@ -886,6 +891,43 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 ```
 
+### 15.1 Benchmark Harness — `bench/InvoiceArchive.Bench`
+
+Analiz §35'te istenen performans testleri için bağımsız bir console proje. Hiçbir dış bağımlılık
+(ES / S3 / Kafka / Postgres) gerektirmez: ES yerine `GeneratedInvoiceReader`, S3 yerine `NoopStorage`
+(ayarlanabilir gecikme ile), Kafka yerine `NoopEventPublisher`, DB yerine `InMemoryArchiveBatchRepository`
+kullanılır. Böylece **sadece pipeline'ın kendi throughput / concurrency davranışı** ölçülür.
+
+Alt komutlar:
+
+| Komut                                                                                          | Ne yapar                                                                              |
+|------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| `zip <invoiceCount> <xmlBytes> [includeMetadata=true]`                                         | `StreamingZipArchiveBuilder`'ı izole ölçer — MiB/s, ms/invoice, ZIP boyutu            |
+| `pipeline <invoiceCount> <concurrency> <channelCapacity> [uploadDelayMs=0] [maxRecordsPerBatch=1000]` | Tek `BatchProcessor.RunAsync` koşusu — elapsed, batches, inv/s                        |
+| `sweep [invoiceCount=10000] [uploadDelayMs=5] [maxRecordsPerBatch=1000]`                       | `concurrency ∈ {1,2,4,8} × channel ∈ {1,4,16}` matris — Markdown tablosu üretir       |
+
+Çalıştırma:
+
+```bash
+dotnet run --project bench/InvoiceArchive.Bench --configuration Release -- sweep 10000 5 1000
+dotnet run --project bench/InvoiceArchive.Bench --configuration Release -- zip 5000 4096
+dotnet run --project bench/InvoiceArchive.Bench --configuration Release -- pipeline 20000 4 8 5 2000
+```
+
+Örnek `sweep 2000 2 500` çıktısı (dev laptop):
+
+```
+| Concurrency | Channel | Batches | Elapsed (s) | inv/s   | MiB/s |
+|-------------|---------|---------|-------------|---------|-------|
+|           1 |       1 |       4 |       0.368 |    5433 |   2.5 |
+|           2 |       4 |       4 |       0.235 |    8523 |   3.9 |
+|           4 |       4 |       4 |       0.138 |   14465 |   6.6 |
+|           8 |      16 |       4 |       0.156 |   12795 |   5.9 |
+```
+
+Not: `uploadDelayMs` upload çağrısı başına simüle edilmiş round-trip'tir; production S3 latency'sini
+yaklaşık modellemek için bu değeri ölçtüğünüz p50/p95'e ayarlayın.
+
 ---
 
 ## 16. Analiz Dokümanı Eşleşme Tablosu (42 madde)
@@ -931,7 +973,7 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 | 32 | Docker Compose                                    | ES + Kafka (KRaft) + MinIO + worker + consumer                                                       |
 | 33 | Structured logging                                | Serilog — batch başına BatchId, InvoiceCount, ZipSize, Sha256, Status                                |
 | 34 | Metrics                                           | Prometheus — 5 metric, Application `IArchiveMetrics` portu üzerinden per-batch kaydediliyor          |
-| 35 | Performans testleri                               | Benchmark scriptleri yok — production'a giderken yapılmalı (MVP dışı)                                |
+| 35 | Performans testleri                               | `bench/InvoiceArchive.Bench` — `zip` / `pipeline` / `sweep` alt komutları (§15.1)                    |
 | 36 | Test senaryoları                                  | Happy path + idempotency + max-record + concurrency + buffer + sanitization + key layout (12 test)   |
 | 37 | Güvenlik                                          | `ServerSideEncryption=AES256` opsiyon; IAM Role AWS default credential chain (bkz. §18)              |
 | 38 | S3 lifecycle policy                               | Uygulama dışı — S3 bucket policy tarafında yapılır                                                   |
