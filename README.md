@@ -145,10 +145,14 @@ src/
 │   ├── Metrics/ArchiveMetrics.cs
 │   └── Dockerfile
 │
-└── InvoiceArchive.StorageConsumer      BackgroundService (doğrulayıcı)
-    ├── StorageStatusWorker.cs          Kafka → S3 HEAD → status Verified → completed event
+├── InvoiceArchive.StorageConsumer      BackgroundService (doğrulayıcı)
+│   ├── StorageStatusWorker.cs          Kafka → S3 HEAD → status Verified → completed event
+│   ├── Program.cs
+│   └── Dockerfile
+│
+└── InvoiceArchive.DlqReplay            Console tool — DLQ mesajlarını orijinal topic'e replay eder
     ├── Program.cs
-    └── Dockerfile
+    └── ReplayOptions.cs
 
 tests/
 └── InvoiceArchive.Tests                xUnit birim testleri
@@ -464,6 +468,36 @@ Bu yapıyla:
 - Ana topic tıkanmaz (poison message ilerler).
 - Kaybolan mesaj olmaz (DLQ tutulur).
 - Manual replay için gerekli tüm bağlam header'larda mevcuttur.
+
+### 8.4 DLQ Replay CLI
+
+`src/InvoiceArchive.DlqReplay` bağımsız bir console uygulamasıdır. DLQ topic'inden
+mesajları okur, `x-original-topic` header'ından (veya `--to` override'ıyla belirlenen)
+hedef topic'e yeniden publish eder ve offset'i commit eder. Replay edilen mesajlara
+`x-replayed-from` ve `x-replayed-at` header'ları eklenir; eski `x-original-*` /
+`x-error*` / `x-failed-at` header'ları sıyrılır — böylece consumer replay'i normal
+mesajdan ayırt edebilir.
+
+Örnek kullanım:
+
+```bash
+# Kuru koşum — ne olacağını sadece logla
+dotnet run --project src/InvoiceArchive.DlqReplay -- \
+  -b localhost:29092 --dry-run --max 10
+
+# İlk 50 mesajı orijinal topic'e (header'dan) geri gönder
+dotnet run --project src/InvoiceArchive.DlqReplay -- \
+  -b localhost:29092 --max 50
+
+# Farklı bir hedefe zorla (örn. staging topic)
+dotnet run --project src/InvoiceArchive.DlqReplay -- \
+  -b localhost:29092 --to invoice.archive.created.staging
+```
+
+Argüman özeti (`--help` ile de yazdırılır): `--bootstrap/-b`, `--dlq`, `--group/-g`,
+`--to`, `--max`, `--idle` (kaç saniye yeni mesaj gelmezse çık — default 10),
+`--from-latest`, `--dry-run`, ayrıca `--security-protocol` / `--sasl-*` production
+Kafka için.
 
 ---
 
@@ -783,7 +817,7 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 
 ## 15. Testler
 
-`tests/InvoiceArchive.Tests` içinde 19 xUnit testi:
+`tests/InvoiceArchive.Tests` içinde 24 xUnit testi:
 
 | Test                                                                              | Doğruladığı davranış                                                          |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
@@ -806,6 +840,11 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 | `HealthCheckServerTests.Live_endpoint_returns_200_even_when_dependencies_unhealthy` | `/health/live` bağımlılık durumundan bağımsız 200 döner                       |
 | `HealthCheckServerTests.Ready_endpoint_returns_200_when_all_checks_healthy`       | Tüm probe'lar `Healthy` → `/health/ready` 200                                 |
 | `HealthCheckServerTests.Ready_endpoint_returns_503_when_any_check_fails`          | Bir probe fail olursa `/health/ready` 503 ve detay JSON gövdede               |
+| `ReplayOptionsTests.Parses_defaults_from_empty_args`                              | DLQ replay CLI argümansız çalıştığında localhost:9092/invoice.archive.dlq varsayılanları |
+| `ReplayOptionsTests.Parses_all_common_flags`                                      | `-b/--dlq/-g/--to/--max/--idle/--from-latest/--dry-run` doğru parse           |
+| `ReplayOptionsTests.Returns_null_on_unknown_flag`                                 | Bilinmeyen argüman → null (usage yazdırılır)                                  |
+| `ReplayOptionsTests.Returns_null_on_missing_value_for_flag`                       | `--bootstrap` için değer verilmediğinde null                                  |
+| `ReplayOptionsTests.Returns_null_on_non_integer_max`                              | `--max abc` gibi geçersiz sayı → null                                         |
 
 Çalıştırma:
 

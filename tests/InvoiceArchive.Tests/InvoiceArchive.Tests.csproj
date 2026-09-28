@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\src\InvoiceArchive.Infrastructure\InvoiceArchive.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\InvoiceArchive.Domain\InvoiceArchive.Domain.csproj" />
     <ProjectReference Include="..\..\src\InvoiceArchive.Contracts\InvoiceArchive.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\InvoiceArchive.DlqReplay\InvoiceArchive.DlqReplay.csproj" />
   </ItemGroup>
 
 </Project>

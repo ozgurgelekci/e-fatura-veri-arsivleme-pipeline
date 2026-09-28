@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/InvoiceArchive.Application/InvoiceArchive.Application.csproj" />
     <Project Path="src/InvoiceArchive.Contracts/InvoiceArchive.Contracts.csproj" />
+    <Project Path="src/InvoiceArchive.DlqReplay/InvoiceArchive.DlqReplay.csproj" />
     <Project Path="src/InvoiceArchive.Domain/InvoiceArchive.Domain.csproj" />
     <Project Path="src/InvoiceArchive.Infrastructure/InvoiceArchive.Infrastructure.csproj" />
     <Project Path="src/InvoiceArchive.StorageConsumer/InvoiceArchive.StorageConsumer.csproj" />
