@@ -221,6 +221,7 @@ Analiz §6'daki riskli örneği (`MemoryStream.ToArray()`) yapmaz:
 
 - `ZipArchive` mode `Create`, `leaveOpen=true`; hedef stream `FileStream` (temp file).
 - Her invoice geldikçe `invoices/{sanitize(id)}.xml` entry'sine yazılır.
+- `ArchiveOptions.IncludeInvoiceMetadata=true` (default) iken her XML'in yanına `invoices/{sanitize(id)}.metadata.json` yazılır: `{ InvoiceId, Uuid, Sender, Receiver, CreatedAt, TenantId }`. Audit / e-fatura raporlama için ZIP'i tek başına açıklanabilir kılar.
 - Yazıldıkça `currentCount` ve `currentSize` artar; `BatchLimits.IsFull` true olunca `LimitReached=true` işaretlenip döngü biter.
 - Son entry olarak `manifest.json` eklenir.
 - Archive `Dispose` edildikten sonra dosya yeniden okunur, **SHA-256** hesaplanır.
@@ -628,6 +629,7 @@ konfigürasyon **host boot sırasında** `OptionsValidationException` fırlatır
 | `TenantId`                 | *(null)*    | Multi-tenant filter + key prefix                            |
 | `BucketName`               | `invoice-archive` | S3/MinIO bucket                                       |
 | `RunOnceAndExit`           | `true`      | Bir tam pass sonrası exit — cron/K8s Job scheduling için    |
+| `IncludeInvoiceMetadata`   | `true`      | ZIP'e her fatura için `{id}.metadata.json` (sender/receiver/uuid/createdAt/tenant) ekle |
 
 ### 11.2 `Elasticsearch` bölümü
 
@@ -807,7 +809,7 @@ dotnet run --project src/InvoiceArchive.Worker
 1. http://localhost:9001 aç → `minioadmin` / `minioadmin` ile giriş.
 2. `invoice-archive` bucket'ına gir.
 3. `2026/08/01/batch-....zip` altında ZIP dosyasını gör.
-4. İndirip aç → `invoices/INV-1.xml`, `invoices/INV-2.xml`, `invoices/INV-3.xml`, `manifest.json`.
+4. İndirip aç → `invoices/INV-1.xml`, `invoices/INV-1.metadata.json`, `invoices/INV-2.xml`, `invoices/INV-2.metadata.json`, `invoices/INV-3.xml`, `invoices/INV-3.metadata.json`, `manifest.json`.
 
 ### 14.4 Kafka event'ini gör
 
@@ -837,13 +839,15 @@ BatchId=... Verified Bucket=invoice-archive Path=... Size=... Sha256=...
 
 ## 15. Testler
 
-`tests/InvoiceArchive.Tests` içinde 34 xUnit testi:
+`tests/InvoiceArchive.Tests` içinde 36 xUnit testi:
 
 | Test                                                                              | Doğruladığı davranış                                                          |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------------------------|
 | `StreamingZipArchiveBuilderTests.Builds_zip_with_manifest_and_counts_correctly`   | 50 invoice → 51 entry (50 XML + manifest.json), SHA-256 dolu, ilk/son id, `compression=deflate`, `archiveVersion=1` |
 | `StreamingZipArchiveBuilderTests.Stops_at_max_record_count`                       | `MaxRecordCount=10` sınırına ulaşınca `LimitReached=true`, invoice sayısı 10  |
 | `StreamingZipArchiveBuilderTests.Sanitizes_unsafe_invoice_ids_in_entry_names`     | `../../evil` gibi id'ler entry adında path traversal'a dönüşmez               |
+| `StreamingZipArchiveBuilderTests.Emits_metadata_json_per_invoice_when_enabled`    | `IncludeInvoiceMetadata=true` → her XML yanında `{id}.metadata.json` entry (2N+1 entry)  |
+| `StreamingZipArchiveBuilderTests.Skips_metadata_json_when_disabled`               | `IncludeInvoiceMetadata=false` → sadece XML entry (N+1 entry), metadata.json yok         |
 | `ArchiveServiceIdempotencyTests.Second_upload_is_skipped_when_object_already_exists` | Aynı batchId iki kere işlense de `storage.UploadCallCount == 1`             |
 | `BatchProcessorConcurrencyTests.Processes_all_batches_with_multiple_consumers`    | `MaxConcurrency=4` + `ChannelCapacity=2` → 100 invoice / 10 batch tam işlenir |
 | `BatchProcessorConcurrencyTests.Producer_stops_batch_when_approx_size_limit_reached` | Producer, `MaxArchiveSizeBytes` aşımından önce batch'i kapatır             |
@@ -898,7 +902,7 @@ dotnet test tests/InvoiceArchive.Tests/InvoiceArchive.Tests.csproj
 | 5  | Batch boyutu — record + byte                      | `BatchLimits.IsFull(count, size)` — hangisine önce ulaşılırsa                                        |
 | 6  | ZIP memory riski                                  | RAM'de ZIP tutulmuyor — temp file'a stream                                                           |
 | 7  | Streaming ZIP                                     | `StreamingZipArchiveBuilder` invoice geldikçe entry yazar                                            |
-| 8  | ZIP içerik yapısı                                 | `invoices/{id}.xml` + `manifest.json`                                                                |
+| 8  | ZIP içerik yapısı                                 | `invoices/{id}.xml` (+ opsiyonel `invoices/{id}.metadata.json` §17.3) + `manifest.json`             |
 | 8.1| Manifest içeriği                                  | `ArchiveManifest` — batchId, createdAt, invoiceCount, compression, archiveVersion                    |
 | 9  | Kafka'nın rolü — kritik karar                     | **Yaklaşım 2 uygulandı** — Kafka sadece event/metadata                                               |
 | 9.1| ZIP-through-Kafka riski                           | Reddedildi — analiz dokümanındaki gerekçelerle                                                       |
@@ -996,13 +1000,25 @@ Docker Compose'da `postgres:16-alpine` servisi 5432 portunda hazır; init script
 
 ### 17.3 Arşivlenen Veri Formatı (§25)
 
-Şu an sadece `invoice.Xml` XML olarak ZIP'e giriyor.
+Uygulanan: ZIP her fatura için **XML + yan `metadata.json`** içerir (default).
+`ArchiveOptions.IncludeInvoiceMetadata=false` yapılarak sadece XML'e düşülebilir (backwards compatibility / storage tasarrufu için).
 
-**Alternatifler:**
+`metadata.json` şeması:
 
-- XML + `metadata.json` (sender, receiver, uuid, createdAt) — audit için faydalı.
-- XML only — legal olarak yeterli olabilir.
-- JSON (tüm document) — machine-readable ama yasal olarak XML tercih edilir.
+```json
+{
+  "InvoiceId": "INV-1",
+  "Uuid": "…",
+  "Sender": "…",
+  "Receiver": "…",
+  "CreatedAt": "2026-01-01T00:00:01Z",
+  "TenantId": "tenant-x"
+}
+```
+
+**Not:** JSON (tüm document) yerine XML + metadata.json tercih edildi; yasal olarak XML orijinal
+olduğu gibi kalırken, metadata.json downstream tüketicilerin (audit, reporting) XML parse etmeden
+kritik alanlara ulaşmasını sağlar.
 
 ### 17.4 AWS S3 Production Credentials
 

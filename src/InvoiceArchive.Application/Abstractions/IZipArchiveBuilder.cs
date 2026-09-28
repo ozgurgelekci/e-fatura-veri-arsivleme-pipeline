@@ -11,6 +11,7 @@ public interface IZipArchiveBuilder
         IAsyncEnumerable<Invoice> invoices,
         Stream destination,
         BatchLimits limits,
+        bool includeInvoiceMetadata,
         CancellationToken cancellationToken);
 }
 

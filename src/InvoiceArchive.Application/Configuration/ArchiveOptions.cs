@@ -34,4 +34,6 @@ public sealed class ArchiveOptions
     public string BucketName { get; set; } = "invoice-archive";
 
     public bool RunOnceAndExit { get; set; } = false;
+
+    public bool IncludeInvoiceMetadata { get; set; } = true;
 }

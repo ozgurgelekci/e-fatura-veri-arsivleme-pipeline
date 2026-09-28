@@ -84,6 +84,7 @@ public sealed class ArchiveService
                     invoices,
                     fileStream,
                     limits,
+                    options.IncludeInvoiceMetadata,
                     cancellationToken).ConfigureAwait(false);
             }
 

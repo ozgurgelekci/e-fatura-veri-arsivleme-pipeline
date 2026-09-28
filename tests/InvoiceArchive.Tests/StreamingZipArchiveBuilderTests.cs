@@ -25,6 +25,7 @@ public class StreamingZipArchiveBuilderTests
             invoices,
             memory,
             new BatchLimits(MaxRecordCount: 1000, MaxArchiveSizeBytes: long.MaxValue),
+            includeInvoiceMetadata: false,
             CancellationToken.None);
 
         Assert.Equal(50, result.InvoiceCount);
@@ -71,6 +72,7 @@ public class StreamingZipArchiveBuilderTests
             ProduceWithUnsafeIds(),
             memory,
             new BatchLimits(MaxRecordCount: 10, MaxArchiveSizeBytes: long.MaxValue),
+            includeInvoiceMetadata: false,
             CancellationToken.None);
 
         Assert.Equal(1, result.InvoiceCount);
@@ -107,10 +109,90 @@ public class StreamingZipArchiveBuilderTests
             invoices,
             memory,
             new BatchLimits(MaxRecordCount: 10, MaxArchiveSizeBytes: long.MaxValue),
+            includeInvoiceMetadata: false,
             CancellationToken.None);
 
         Assert.Equal(10, result.InvoiceCount);
         Assert.True(result.LimitReached);
+    }
+
+    [Fact]
+    public async Task Emits_metadata_json_per_invoice_when_enabled()
+    {
+        var builder = new StreamingZipArchiveBuilder(
+            NullLogger<StreamingZipArchiveBuilder>.Instance,
+            TimeProvider.System);
+
+        using var memory = new MemoryStream();
+        var result = await builder.BuildAsync(
+            "meta-batch",
+            tenantId: "tenant-x",
+            ProduceRichInvoices(3),
+            memory,
+            new BatchLimits(MaxRecordCount: 10, MaxArchiveSizeBytes: long.MaxValue),
+            includeInvoiceMetadata: true,
+            CancellationToken.None);
+
+        Assert.Equal(3, result.InvoiceCount);
+
+        memory.Position = 0;
+        using var archive = new ZipArchive(memory, ZipArchiveMode.Read);
+        Assert.Equal(3 * 2 + 1, archive.Entries.Count); // xml + metadata per invoice + manifest
+
+        var metadataEntry = archive.GetEntry("invoices/INV-1.metadata.json");
+        Assert.NotNull(metadataEntry);
+
+        using var metaStream = metadataEntry!.Open();
+        using var doc = await JsonDocument.ParseAsync(metaStream);
+        var root = doc.RootElement;
+        Assert.Equal("INV-1", root.GetProperty("InvoiceId").GetString());
+        Assert.Equal("uuid-1", root.GetProperty("Uuid").GetString());
+        Assert.Equal("sender-1", root.GetProperty("Sender").GetString());
+        Assert.Equal("receiver-1", root.GetProperty("Receiver").GetString());
+        Assert.Equal("tenant-x", root.GetProperty("TenantId").GetString());
+    }
+
+    [Fact]
+    public async Task Skips_metadata_json_when_disabled()
+    {
+        var builder = new StreamingZipArchiveBuilder(
+            NullLogger<StreamingZipArchiveBuilder>.Instance,
+            TimeProvider.System);
+
+        using var memory = new MemoryStream();
+        var result = await builder.BuildAsync(
+            "no-meta-batch",
+            tenantId: null,
+            ProduceInvoices(3),
+            memory,
+            new BatchLimits(MaxRecordCount: 10, MaxArchiveSizeBytes: long.MaxValue),
+            includeInvoiceMetadata: false,
+            CancellationToken.None);
+
+        Assert.Equal(3, result.InvoiceCount);
+
+        memory.Position = 0;
+        using var archive = new ZipArchive(memory, ZipArchiveMode.Read);
+        Assert.Equal(3 + 1, archive.Entries.Count); // xml only + manifest
+        Assert.Null(archive.GetEntry("invoices/INV-1.metadata.json"));
+    }
+
+    private static async IAsyncEnumerable<Invoice> ProduceRichInvoices(int count)
+    {
+        for (var i = 1; i <= count; i++)
+        {
+            yield return new Invoice
+            {
+                InvoiceId = $"INV-{i}",
+                Uuid = $"uuid-{i}",
+                Sender = $"sender-{i}",
+                Receiver = $"receiver-{i}",
+                Xml = $"<Invoice id=\"{i}\"/>",
+                CreatedAt = new DateTime(2026, 1, 1, 0, 0, i, DateTimeKind.Utc),
+                TenantId = "tenant-x"
+            };
+            await Task.Yield();
+        }
     }
 
     private static async IAsyncEnumerable<Invoice> ProduceInvoices(int count)

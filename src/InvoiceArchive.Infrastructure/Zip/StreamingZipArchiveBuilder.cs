@@ -33,6 +33,7 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
         IAsyncEnumerable<Invoice> invoices,
         Stream destination,
         BatchLimits limits,
+        bool includeInvoiceMetadata,
         CancellationToken cancellationToken)
     {
         if (!destination.CanSeek)
@@ -59,7 +60,8 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
                     break;
                 }
 
-                var entryName = $"invoices/{Sanitize(invoice.InvoiceId)}.xml";
+                var safeId = Sanitize(invoice.InvoiceId);
+                var entryName = $"invoices/{safeId}.xml";
                 var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
                 await using (var entryStream = entry.Open())
                 await using (var writer = new StreamWriter(entryStream, new UTF8Encoding(false)))
@@ -67,11 +69,29 @@ public sealed class StreamingZipArchiveBuilder : IZipArchiveBuilder
                     await writer.WriteAsync(invoice.Xml.AsMemory(), cancellationToken).ConfigureAwait(false);
                 }
 
+                var createdAtUtc = DateTime.SpecifyKind(invoice.CreatedAt, DateTimeKind.Utc);
+
+                if (includeInvoiceMetadata)
+                {
+                    var metadataEntry = archive.CreateEntry($"invoices/{safeId}.metadata.json", CompressionLevel.Optimal);
+                    await using var metadataStream = metadataEntry.Open();
+                    var metadata = new InvoiceMetadata
+                    {
+                        InvoiceId = invoice.InvoiceId,
+                        Uuid = invoice.Uuid,
+                        Sender = invoice.Sender,
+                        Receiver = invoice.Receiver,
+                        CreatedAt = createdAtUtc,
+                        TenantId = invoice.TenantId
+                    };
+                    await JsonSerializer.SerializeAsync(metadataStream, metadata, ManifestJsonOptions, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 invoiceCount++;
                 approxUncompressed += Encoding.UTF8.GetByteCount(invoice.Xml);
                 firstInvoiceId ??= invoice.InvoiceId;
                 lastInvoiceId = invoice.InvoiceId;
-                var createdAtUtc = DateTime.SpecifyKind(invoice.CreatedAt, DateTimeKind.Utc);
                 firstInvoiceCreatedAt ??= createdAtUtc;
                 lastInvoiceCreatedAt = createdAtUtc;
             }
